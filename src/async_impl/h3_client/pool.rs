@@ -148,6 +148,15 @@ impl PoolClient {
             _ => {}
         }
 
+        if cfg!(feature = "multipart") {
+            use futures_util::StreamExt;
+        
+            let mut body_as_stream = req_body.into_stream();
+            while let Some(r) = body_as_stream.next().await {
+                stream.send_data(r?).await?;
+            }
+        }
+
         stream.finish().await?;
 
         let resp = stream.recv_response().await?;
