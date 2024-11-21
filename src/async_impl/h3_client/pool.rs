@@ -145,16 +145,17 @@ impl PoolClient {
             Some(b) if !b.is_empty() => {
                 stream.send_data(Bytes::copy_from_slice(b)).await?;
             }
-            _ => {}
-        }
-
-        if cfg!(feature = "multipart") {
-            use futures_util::StreamExt;
-        
-            let mut body_as_stream = req_body.into_stream();
-            while let Some(r) = body_as_stream.next().await {
-                stream.send_data(r?).await?;
+            #[cfg(feature = "multipart")]
+            // body is Streaming
+            None => {
+                use futures_util::StreamExt;
+            
+                let mut body_as_stream = req_body.into_stream();
+                while let Some(frame) = body_as_stream.next().await {
+                    stream.send_data(frame?).await?;
+                }
             }
+            _ => {}
         }
 
         stream.finish().await?;
