@@ -163,9 +163,16 @@ impl PoolClient {
         let resp = stream.recv_response().await?;
 
         let mut resp_body = Vec::new();
-        while let Some(chunk) = stream.recv_data().await? {
-            resp_body.extend(chunk.chunk())
+        let mut body_len = 0;
+        while let Some(mut chunk) = stream.recv_data().await? {
+            let ext = chunk.remaining();
+            resp_body.extend(std::iter::repeat_n(0, ext));
+            let extended = resp_body.len();
+            chunk.copy_to_slice(&mut resp_body[body_len..extended]);
+            body_len = extended;
         }
+
+        log::info!("total: {}", resp_body.len());
 
         let resp_body = Full::new(resp_body.into())
             .map_err(|never| match never {})
