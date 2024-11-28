@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use bytes::{Bytes, Buf};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -8,13 +8,16 @@ use tokio::time::Instant;
 use crate::async_impl::body::ResponseBody;
 use crate::error::{BoxError, Error, Kind};
 use crate::Body;
-use bytes::Buf;
+
 use futures_util::future;
 use h3::client::SendRequest;
 use h3_quinn::{Connection, OpenStreams};
 use http::uri::{Authority, Scheme};
 use http::{Request, Response, Uri};
+use http_body::Frame;
+use http_body_util::{BodyExt, StreamBody};
 use log::trace;
+use async_stream::try_stream;
 
 pub(super) type Key = (Scheme, Authority);
 
@@ -126,7 +129,6 @@ impl PoolClient {
         &mut self,
         req: Request<Body>,
     ) -> Result<Response<ResponseBody>, BoxError> {
-        use http_body_util::{BodyExt, Full};
         use hyper::body::Body as _;
 
         let (head, req_body) = req.into_parts();
@@ -162,22 +164,14 @@ impl PoolClient {
 
         let resp = stream.recv_response().await?;
 
-        let mut resp_body = Vec::new();
-        let mut body_len = 0;
-        while let Some(mut chunk) = stream.recv_data().await? {
-            let ext = chunk.remaining();
-            resp_body.extend(std::iter::repeat_n(0, ext));
-            let extended = resp_body.len();
-            chunk.copy_to_slice(&mut resp_body[body_len..extended]);
-            body_len = extended;
-        }
-
-        log::info!("total: {}", resp_body.len());
-
-        let resp_body = Full::new(resp_body.into())
-            .map_err(|never| match never {})
-            .boxed();
-
+        let body_stream = try_stream! {
+            while let Some(mut buf) = stream.recv_data().await? {
+                let len = buf.remaining();
+                yield Frame::data(buf.copy_to_bytes(len));
+            }
+        };
+        let resp_body = StreamBody::new(body_stream).boxed();
+        
         Ok(resp.map(|_| resp_body))
     }
 }
